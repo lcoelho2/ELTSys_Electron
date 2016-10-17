@@ -1,0 +1,165 @@
+---
+title: "ELT Study"
+output: 
+  flexdashboard::flex_dashboard:
+     #orientation: rows
+     #vertical_layout: scroll
+      storyboard: true
+      theme: lumen
+      social: menu
+---
+
+```{r message=FALSE, echo=FALSE, comment = NA}
+suppressPackageStartupMessages(library(needs))
+needs(dplyr)
+needs(readr)
+needs(pander)
+
+needs(flexdashboard)
+needs(highcharter)
+needs(ggplot2)
+needs(devtools)
+needs(plotly)
+needs(DT)
+```
+
+```{r message=FALSE, echo=FALSE, comment = NA}
+elt <- read_csv( end,
+                 col_types = cols(
+                   Event = col_integer(),
+                   Rate = col_double(),
+                   ExpectedLoss = col_integer(),
+                   SD = col_integer(),
+                   Exposure = col_double()
+                 ))
+```
+
+```{r message=FALSE, echo=FALSE, comment = NA}
+oepf <- function(){
+  
+  # Frequency Distribution Generation
+  ## distribution of the number of event occurrences in a year
+  ## lambda (Î»); this parameter can be calculated from the ELT as the sum of all the event rates.
+  
+  l <- sum(elt$Rate)
+  
+  ## The parameter Î» can be interpreted as the mean frequency. 
+  ## So a Î» of 0.1 implies that, on average, there will be ten occurrences in 100 years
+  
+  
+  # Severity Distribution Generation
+  ## The severity distribution is the distribution of the size of losses, 
+  ## given that an event has occurred. To model it we use a discrete distribution 
+  ## consisting of a set of loss thresholds, each one with a corresponding conditional 
+  ## exceedance probability (CEP), which is the probability of the event loss being 
+  ## greater than the threshold, given that an event has occurred.
+  
+  thresholds <- seq(0,max(elt$ExpectedLoss),max(elt$ExpectedLoss)/4)
+  thresholds <- as.data.frame(thresholds)
+  
+  #As we wanted 4 intervals we divided our maximum loss value by 4 as the by of the seq command. 
+  
+  eltc <- elt %>% mutate(mu    = ExpectedLoss / Exposure, 
+                         sigma = elt$SD/elt$Exposure,
+                         alpha = ((1 - mu) / sigma^2 - 1 / mu) * mu ^ 2,
+                         beta  =  alpha * (1 / mu - 1)
+  )
+  
+  pr <- as.numeric()
+  cep <- as.numeric()
+  oep <- as.numeric()
+  
+  for(i in 1:nrow(thresholds)){
+    for(j in 1:nrow(eltc)){
+      pr[j]  <- 1 - pbeta(thresholds[i,]/eltc$Exposure[j], eltc$alpha[j], eltc$beta[j]) 
+    }
+    cep[i] <- sum(eltc$Rate * pr) / sum(eltc$Rate) 
+    oep[i] <- 1 - exp(-l*cep[i])
+  }
+  oepdf <- data.frame(thresholds=thresholds[,1],cep,oep)
+  
+  return(oepdf)
+}
+
+oepdf <- suppressWarnings(oepf())
+```
+
+### ELT
+All the information needed to generate the EP curves is stored in the ELT.
+We will assume that this ELT corresponds to the Ground Up financial perspective. According to this ELT, a Northern San Andreas 6.5 earthquake has an annual rate of occurrence of 0.01. This earthquake happens on average once every 100 years. An exposure amount of 5.5 million is susceptible to this event. 
+
+```{r results='asis', message=FALSE, echo=FALSE, comment = NA}
+datatable(elt, options = list(pageLength = 5))
+
+#pandoc.table(head(format(elt, scientific=FALSE, big.mark=",")), split.table = Inf,justify = 'right')
+```
+
+***
+
+In addition, we can expect, on average, ground up losses of 1.5 million from that 5.5 million of exposure if this event occurs. However, we must recognize the fact that the loss amount may be greater than or less than the 1.5 million expected loss value since the standard deviation is greater than zero. This will prove to be a key issue when generating the severity distribution.
+
+### Exposure vesus Expected Loss
+
+```{r  message=FALSE, echo=FALSE, comment = NA}
+hc <- highchart() %>% 
+  hc_xAxis(categories = elt$Exposure,
+           labels=list(format="{value:,.0f}")) %>%   #numeros maiores que 1000 separados
+  hc_add_series(name = "ExpectedLoss",
+                data = elt$ExpectedLoss) 
+hc <- hc %>% 
+  hc_chart(type = "column",
+           options3d = list(enabled = TRUE, beta = 15, alpha = 15))
+
+hc %>% 
+  hc_chart(borderColor = '#EBBA95',
+           borderRadius = 10,
+           borderWidth = 2,
+           backgroundColor = list(
+             linearGradient = c(0, 0, 500, 500),
+             stops = list(
+               list(0, 'rgb(255, 255, 255)'),
+               list(1, 'rgb(200, 200, 255)')
+             )))
+```   
+
+***
+
+Shows loss expected if a particular event occurs.
+
+
+### OEP curve
+
+```{r results='asis', message=FALSE, echo=FALSE, comment = NA}
+hc <- highchart() %>% hc_title(text = "OEP") %>%
+  hc_subtitle(text = "Occurrence exceedance probability") %>% 
+  hc_xAxis(categories = oepdf$thresholds,
+           labels=list(format="{value:,.0f}")) %>%  #numeros maiores que 1000 separados 
+  hc_add_series(name = "oep", 
+                data = oepdf$oep*100) %>%
+  hc_yAxis(#title = list(text = "percentage of tastiness"),
+           labels = list(format = "{value}%"), max =10) %>%   
+  hc_tooltip(formatter = JS("function(){
+              return ('Thresholds:  ' + Highcharts.numberFormat(this.x, 0, '.', ' ')  + ' <br> OEP: ' + Highcharts.numberFormat(this.y,2) + '%' )}"))
+    
+              #valueDecimals= 2,
+             #valuePrefix: '$',
+              # valueSuffix= '%'
+            
+hc %>% 
+  hc_chart(borderColor = '#EBBA95',
+           borderRadius = 10,
+           borderWidth = 2,
+           backgroundColor = list(
+             linearGradient = c(0, 0, 500, 500),
+             stops = list(
+               list(0, 'rgb(255, 255, 255)'),
+               list(1, 'rgb(200, 200, 255)')
+             ))) 
+```   
+
+*** 
+
+The Occurrence exceedance probability (OEP) curve shows the probability that the losses for at least one occurrence will exceed a threshold.
+
+Since the OEP curve is the cumulative distribution for the largest occurrence in a year, it can be used to analyze occurrence-based situations. For example, we can calculate the probability of activating and exhausting occurrence-based contracts such as a policy or reinsurance treaty from OEP curves. In addition, the OEP curve can provide statistical information on single event covers.
+
